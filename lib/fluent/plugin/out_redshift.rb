@@ -2,7 +2,7 @@ module Fluent
 
 
 class RedshiftOutput < BufferedOutput
-  Fluent::Plugin.register_output('redshift', self)
+  Fluent::Plugin.register_output('redshift_auto', self)
 
   # ignore load table error. (invalid data format)
   IGNORE_REDSHIFT_ERROR_REGEXP = /^ERROR:  Load into table '[^']+' failed\./
@@ -34,19 +34,18 @@ class RedshiftOutput < BufferedOutput
   config_param :redshift_user, :string
   config_param :redshift_password, :string
   config_param :redshift_tablename, :string
-  config_param :redshift_schemaname, :string, :default => nil
-  config_param :redshift_copy_base_options, :string , :default => "FILLRECORD ACCEPTANYDATE TRUNCATECOLUMNS"
-  config_param :redshift_copy_options, :string , :default => nil
   # file format
-  config_param :file_type, :string, :default => nil  # json, tsv, csv, msgpack
+  config_param :file_type, :string, :default => nil  # json, tsv, csv
   config_param :delimiter, :string, :default => nil
   # for debug
   config_param :log_suffix, :string, :default => ''
+  # for varchar length
+  config_param :varchar_length, :integer, :default => 255
 
   def configure(conf)
     super
-    @path = "#{@path}/" unless @path.end_with?('/') # append last slash
-    @path = @path[1..-1] if @path.start_with?('/')  # remove head slash
+    @path = "#{@path}/" if /.+[^\/]$/ =~ @path
+    @path = "" if @path == "/"
     @utc = true if conf['utc']
     @db_conf = {
       host:@redshift_host,
@@ -57,12 +56,13 @@ class RedshiftOutput < BufferedOutput
     }
     @delimiter = determine_delimiter(@file_type) if @delimiter.nil? or @delimiter.empty?
     $log.debug format_log("redshift file_type:#{@file_type} delimiter:'#{@delimiter}'")
-    @copy_sql_template = "copy #{table_name_with_schema} from '%s' CREDENTIALS 'aws_access_key_id=#{@aws_key_id};aws_secret_access_key=%s' delimiter '#{@delimiter}' GZIP ESCAPE #{@redshift_copy_base_options} #{@redshift_copy_options};"
+    @copy_sql_template = "copy #{@redshift_tablename} from '%s' CREDENTIALS 'aws_access_key_id=#{@aws_key_id};aws_secret_access_key=%s' delimiter '#{@delimiter}' GZIP TRUNCATECOLUMNS ESCAPE FILLRECORD ACCEPTANYDATE;"
   end
 
   def start
     super
     # init s3 conf
+    $log.debug format_log("redshift file_type:#{@file_type} delimiter:'#{@delimiter}'")
     options = {
       :access_key_id     => @aws_key_id,
       :secret_access_key => @aws_sec_key
@@ -73,13 +73,17 @@ class RedshiftOutput < BufferedOutput
   end
 
   def format(tag, time, record)
+    record = JSON.generate(record)
     if json?
-      record.to_msgpack
-    elsif msgpack?
-      { @record_log_tag => record }.to_msgpack
-    else
-      "#{record[@record_log_tag]}\n"
+      json = JSON.parse(record)
+      cols = []
+      json.each do |key,val|
+        cols.push("#{key}")
+      end
+      make_table_from_tag_name(tag, cols)
     end
+  
+    (json?) ? record.to_msgpack : "#{record[@record_log_tag]}\n"
   end
 
   def write(chunk)
@@ -87,12 +91,8 @@ class RedshiftOutput < BufferedOutput
 
     # create a gz file
     tmp = Tempfile.new("s3-")
-    tmp =
-      if json? || msgpack?
-        create_gz_file_from_structured_data(tmp, chunk, @delimiter)
-      else
-        create_gz_file_from_flat_data(tmp, chunk)
-      end
+    tmp = (json?) ? create_gz_file_from_json(tmp, chunk, @delimiter)
+                  : create_gz_file_from_msgpack(tmp, chunk)
 
     # no data -> skip
     unless tmp
@@ -106,10 +106,6 @@ class RedshiftOutput < BufferedOutput
     # upload gz to s3
     @bucket.objects[s3path].write(Pathname.new(tmp.path),
                                   :acl => :bucket_owner_full_control)
-
-    # close temp file
-    tmp.close!
-
     # copy gz on s3 to redshift
     s3_uri = "s3://#{@s3_bucket}/#{s3path}"
     sql = @copy_sql_template % [s3_uri, @aws_sec_key]
@@ -139,11 +135,7 @@ class RedshiftOutput < BufferedOutput
     @file_type == 'json'
   end
 
-  def msgpack?
-    @file_type == 'msgpack'
-  end
-
-  def create_gz_file_from_flat_data(dst_file, chunk)
+  def create_gz_file_from_msgpack(dst_file, chunk)
     gzw = nil
     begin
       gzw = Zlib::GzipWriter.new(dst_file)
@@ -154,13 +146,13 @@ class RedshiftOutput < BufferedOutput
     dst_file
   end
 
-  def create_gz_file_from_structured_data(dst_file, chunk, delimiter)
+  def create_gz_file_from_json(dst_file, chunk, delimiter)
     # fetch the table definition from redshift
     redshift_table_columns = fetch_table_columns
     if redshift_table_columns == nil
       raise "failed to fetch the redshift table definition."
     elsif redshift_table_columns.empty?
-      $log.warn format_log("no table on redshift. table_name=#{table_name_with_schema}")
+      $log.warn format_log("no table on redshift. table_name=#{@redshift_tablename}")
       return nil
     end
 
@@ -168,18 +160,13 @@ class RedshiftOutput < BufferedOutput
     gzw = nil
     begin
       gzw = Zlib::GzipWriter.new(dst_file)
+       $log.debug format_log("redshift file_type:#{@file_type} delimiter:'#{@delimiter}'")
       chunk.msgpack_each do |record|
         begin
-          hash = json? ? json_to_hash(record[@record_log_tag]) : record[@record_log_tag]
-          tsv_text = hash_to_table_text(redshift_table_columns, hash, delimiter)
+          tsv_text = json_to_table_text(redshift_table_columns, record, delimiter)
           gzw.write(tsv_text) if tsv_text and not tsv_text.empty?
         rescue => e
-          if json?
-            $log.error format_log("failed to create table text from json. text=(#{record[@record_log_tag]})"), :error=>$!.to_s
-          else
-            $log.error format_log("failed to create table text from msgpack. text=(#{record[@record_log_tag]})"), :error=>$!.to_s
-          end
-
+          $log.error format_log("failed to create table text from json. text=(#{record[@record_log_tag]})"), :error=>$!.to_s
           $log.error_backtrace
         end
       end
@@ -192,7 +179,7 @@ class RedshiftOutput < BufferedOutput
 
   def determine_delimiter(file_type)
     case file_type
-    when 'json', 'msgpack', 'tsv'
+    when 'json', 'tsv'
       "\t"
     when "csv"
       ','
@@ -202,10 +189,11 @@ class RedshiftOutput < BufferedOutput
   end
 
   def fetch_table_columns
+    fetch_columns_sql = "select column_name from INFORMATION_SCHEMA.COLUMNS where table_name = '#{@redshift_tablename}' order by ordinal_position;"
     conn = PG.connect(@db_conf)
     begin
       columns = nil
-      conn.exec(fetch_columns_sql_with_schema) do |result|
+      conn.exec(fetch_columns_sql) do |result|
         columns = result.collect{|row| row['column_name']}
       end
       columns
@@ -214,39 +202,28 @@ class RedshiftOutput < BufferedOutput
     end
   end
 
-  def fetch_columns_sql_with_schema
-    @fetch_columns_sql ||= if @redshift_schemaname
-                             "select column_name from INFORMATION_SCHEMA.COLUMNS where table_schema = '#{@redshift_schemaname}' and table_name = '#{@redshift_tablename}' order by ordinal_position;"
-                           else
-                             "select column_name from INFORMATION_SCHEMA.COLUMNS where table_name = '#{@redshift_tablename}' order by ordinal_position;"
-                           end
-  end
+  def json_to_table_text(redshift_table_columns, json_text, delimiter)
+    return "" if json_text.nil? or json_text.empty?
 
-  def json_to_hash(json_text)
-    return nil if json_text.to_s.empty?
-
-    JSON.parse(json_text)
-  rescue => e
-    $log.warn format_log("failed to parse json. "), :error => e.to_s
-  end
-
-  def hash_to_table_text(redshift_table_columns, hash, delimiter)
-    return "" unless hash
-
-    # extract values from hash
-    val_list = redshift_table_columns.collect do |cn|
-      val = hash[cn]
-      val = JSON.generate(val) if val.kind_of?(Hash) or val.kind_of?(Array)
-
-      if val.to_s.empty?
-        nil
-      else
-        val.to_s
-      end
+    # parse json text
+    json_obj = nil
+    begin
+      json_obj = JSON.parse(json_text)
+    rescue => e
+      $log.warn format_log("failed to parse json. "), :error=>e.to_s
+      return ""
     end
+    return "" unless json_obj
 
+    # extract values from json
+    val_list = redshift_table_columns.collect do |cn|
+      val = json_obj[cn]
+      val = nil unless val and not val.to_s.empty?
+      val = JSON.generate(val) if val.kind_of?(Hash) or val.kind_of?(Array)
+      val.to_s unless val.nil?
+    end
     if val_list.all?{|v| v.nil? or v.empty?}
-      $log.warn format_log("no data match for table columns on redshift. data=#{hash} table_columns=#{redshift_table_columns}")
+      $log.warn format_log("no data match for table columns on redshift. json_text=#{json_text} table_columns=#{redshift_table_columns}")
       return ""
     end
 
@@ -275,13 +252,49 @@ class RedshiftOutput < BufferedOutput
     s3path
   end
 
-  def table_name_with_schema
-    @table_name_with_schema ||= if @redshift_schemaname
-                                  "#{@redshift_schemaname}.#{@redshift_tablename}"
-                                else
-                                  @redshift_tablename
-                                end
+  def make_table_from_tag_name(tag, columns_arr)
+
+    conn = PG.connect(@db_conf)
+    sql = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_name LIKE '#{tag}';"
+
+    cnt = 0
+    conn.exec(sql).each do |r|
+      cnt = cnt + 1
+    end
+
+    if cnt >= 1
+      return
+    end
+
+    cols = ""
+    for col_name in columns_arr do
+      cols = cols + "\"#{col_name}\" varchar(#{varchar_length}),"
+    end
+
+    len = cols.length
+    cols.slice!(len - 1)
+      
+    if @redshift_schemaname
+      table_name = "#{@redshift_schemaname}.#{tag}"
+    else
+      table_name = "#{tag}"
+    end
+
+    sql = "CREATE TABLE #{table_name} (#{cols});"
+    begin
+      conn.exec(sql)
+    rescue PGError => e
+      $log.error format_log("failed CREATE TABLE table_name: #{table_name}")
+      $log.error format_log("class: " + e.class + " msg: " + e.message)
+    rescue => e
+      $log.error format_log("failed CREATE TABLE table_name: #{table_name}")
+      $log.error format_log("class: " + e.class + " msg: " + e.message)
+    end
+    conn.close
+    $log.info format_log("TABLE CREATED: => #{sql}")
   end
+
+
 end
 
 

@@ -33,6 +33,8 @@ Format:
         redshift_schemaname YOUR_AMAZON_REDSHIFT_CLUSTER_TARGET_SCHEMA_NAME
         redshift_tablename YOUR_AMAZON_REDSHIFT_CLUSTER_TARGET_TABLE_NAME
         file_type [tsv|csv|json|msgpack]
+        varchar_length ALL_COLUMNS_VARCHAR_LENGTH
+
 
         # buffer
         buffer_type file
