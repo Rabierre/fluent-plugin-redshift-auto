@@ -34,6 +34,8 @@ class RedshiftOutput < BufferedOutput
   config_param :redshift_user, :string
   config_param :redshift_password, :string
   config_param :redshift_tablename, :string
+  config_param :redshift_schemaname, :string, :default => "public"
+  config_param :make_auto_table, :integer, :default => 1 #1 => make_auto 0=> no
   # file format
   config_param :file_type, :string, :default => nil  # json, tsv, csv
   config_param :delimiter, :string, :default => nil
@@ -56,7 +58,7 @@ class RedshiftOutput < BufferedOutput
     }
     @delimiter = determine_delimiter(@file_type) if @delimiter.nil? or @delimiter.empty?
     $log.debug format_log("redshift file_type:#{@file_type} delimiter:'#{@delimiter}'")
-    @copy_sql_template = "copy #{@redshift_tablename} from '%s' CREDENTIALS 'aws_access_key_id=#{@aws_key_id};aws_secret_access_key=%s' delimiter '#{@delimiter}' GZIP TRUNCATECOLUMNS ESCAPE FILLRECORD ACCEPTANYDATE;"
+    @copy_sql_template = "copy #{@redshift_schemaname}.#{@redshift_tablename} from '%s' CREDENTIALS 'aws_access_key_id=#{@aws_key_id};aws_secret_access_key=%s' delimiter '#{@delimiter}' GZIP TRUNCATECOLUMNS ESCAPE FILLRECORD ACCEPTANYDATE;"
   end
 
   def start
@@ -74,7 +76,7 @@ class RedshiftOutput < BufferedOutput
 
   def format(tag, time, record)
     record = JSON.generate(record)
-    if json?
+    if @make_auto_table == 1 && json?
       json = JSON.parse(record)
       cols = []
       json.each do |key,val|
@@ -274,10 +276,29 @@ class RedshiftOutput < BufferedOutput
     len = cols.length
     cols.slice!(len - 1)
       
-    if @redshift_schemaname
+    if @redshift_schemaname && @redshift_schemaname != "public"
+      sql = "SELECT nspname FROM pg_namespace WHERE nspname LIKE '#{@redshift_schemaname}';"
+      cnt = 0
+      conn.exec(sql).each do |r|
+        cnt = cnt + 1
+      end
+
+      if cnt == 0
+        sql = "CREATE SCHEMA #{@redshift_schemaname}"
+         begin
+        conn.exec(sql)
+        rescue PGError => e
+          $log.error format_log("failed CREATE SCHEMA schema_name: #{@redshift_schemaname}")
+          $log.error format_log("class: " + e.class + " msg: " + e.message)
+        rescue => e
+          $log.error format_log("failed CREATE SCHEMA schema_name: #{@redshift_schemaname}")
+          $log.error format_log("class: " + e.class + " msg: " + e.message)
+        end
+        $log.info format_log("SCHEMA CREATED: => #{sql}")
+      end
       table_name = "#{@redshift_schemaname}.#{tag}"
     else
-      table_name = "#{tag}"
+      table_name = "#{tag}"      
     end
 
     sql = "CREATE TABLE #{table_name} (#{cols});"
