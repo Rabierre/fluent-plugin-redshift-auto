@@ -1,7 +1,7 @@
 require 'test_helper'
 
 require 'fluent/test'
-require 'fluent/plugin/out_redshift'
+require 'fluent/plugin/out_redshift_auto'
 require 'flexmock/test_unit'
 require 'zlib'
 

@@ -5,7 +5,7 @@ Gem::Specification.new do |gem|
   gem.name          = "fluent-plugin-redshift-auto"
   gem.version       = File.read("VERSION").strip
   gem.authors       = ["Takashi Honda"]
-  gem.email         = ["takashi_honda@cybird.co.jp"]
+  gem.email         = ["takashi.0628.honda@gmail.com"]
   gem.description   = %q{Amazon Redshift output plugin for Fluentd with creating table}
   gem.summary       = gem.description
   gem.homepage      = "https://github.com/takashi-honda/fluent-plugin-redshift-auto"
