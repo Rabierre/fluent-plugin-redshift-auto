@@ -191,7 +191,7 @@ class RedshiftOutput < BufferedOutput
   end
 
   def fetch_table_columns
-    fetch_columns_sql = "select column_name from INFORMATION_SCHEMA.COLUMNS where table_name = '#{@redshift_tablename}' order by ordinal_position;"
+    fetch_columns_sql = "select column_name from INFORMATION_SCHEMA.COLUMNS where table_name = '#{@redshift_tablename}' and table_schema = '#{@redshift_schemaname}' order by ordinal_position;"
     conn = PG.connect(@db_conf)
     begin
       columns = nil
