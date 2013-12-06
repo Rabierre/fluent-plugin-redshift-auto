@@ -58,7 +58,7 @@ class RedshiftOutput < BufferedOutput
     }
     @delimiter = determine_delimiter(@file_type) if @delimiter.nil? or @delimiter.empty?
     $log.debug format_log("redshift file_type:#{@file_type} delimiter:'#{@delimiter}'")
-    @copy_sql_template = "copy #{@redshift_schemaname}.#{@redshift_tablename} from '%s' CREDENTIALS 'aws_access_key_id=#{@aws_key_id};aws_secret_access_key=%s' delimiter '#{@delimiter}' GZIP TRUNCATECOLUMNS ESCAPE FILLRECORD ACCEPTANYDATE;"
+    @copy_sql_template = "copy #{@redshift_schemaname}.%s from '%s' CREDENTIALS 'aws_access_key_id=#{@aws_key_id};aws_secret_access_key=%s' delimiter '#{@delimiter}' GZIP TRUNCATECOLUMNS ESCAPE FILLRECORD ACCEPTANYDATE;"
   end
 
   def start
@@ -90,6 +90,8 @@ class RedshiftOutput < BufferedOutput
 
   def write(chunk)
     $log.debug format_log("start creating gz.")
+    file_name = File::basename(chunk.path)
+    table_name = file_name.sub(/\..*/, "")
 
     # create a gz file
     tmp = Tempfile.new("s3-")
@@ -110,7 +112,8 @@ class RedshiftOutput < BufferedOutput
                                   :acl => :bucket_owner_full_control)
     # copy gz on s3 to redshift
     s3_uri = "s3://#{@s3_bucket}/#{s3path}"
-    sql = @copy_sql_template % [s3_uri, @aws_sec_key]
+    sql = @copy_sql_template % [table_name, s3_uri, @aws_sec_key]
+    $log.error format_log(sql)
     $log.debug  format_log("start copying. s3_uri=#{s3_uri}")
     conn = nil
     begin
