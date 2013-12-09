@@ -36,7 +36,7 @@ class RedshiftOutput < BufferedOutput
   config_param :redshift_tablename, :string
   config_param :redshift_schemaname, :string, :default => "public"
   config_param :make_auto_table, :integer, :default => 1 #1 => make_auto 0=> no
-  config_param :tag_table, :integer, :default = 1 #1 => tag_name = table_name, 0 => no
+  config_param :tag_table, :integer, :default => 1 #1 => tag_name = table_name, 0 => no
   # file format
   config_param :file_type, :string, :default => nil  # json, tsv, csv
   config_param :delimiter, :string, :default => nil
