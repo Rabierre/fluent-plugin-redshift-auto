@@ -32,6 +32,8 @@ Format:
         redshift_password YOUR_AMAZON_REDSHIFT_CLUSTER_PASSWORD
         redshift_schemaname YOUR_AMAZON_REDSHIFT_CLUSTER_TARGET_SCHEMA_NAME
         redshift_tablename YOUR_AMAZON_REDSHIFT_CLUSTER_TARGET_TABLE_NAME
+        make_auto_table 1 # 1 => make table auto 0 => no
+        tag_table 1 # 1=> tag_name = table_name, 0 => no, use redshift_atablename
         file_type [tsv|csv|json|msgpack]
         varchar_length ALL_COLUMNS_VARCHAR_LENGTH
 
@@ -114,6 +116,10 @@ Example (watch and upload json formatted apache log):
 + `redshift_tablename` (required) : table name to store data.
 
 + `redshift_schemaname` : schema name to store data. By default, this option is not set and find table without schema as your own search_path.
+
++ `make_auto_table` (optional, integer) : whether make tables automatically. If you set 1, this makes tables automatically else if you set 0, doesn't make.
+
++ `tag_table` (optional, integer) : whether table_name equals tag_name. If you set 1, it shows tag_name equals table_name, else if you set 0, it's not.
 
 + `file_type` : file format of the source data.  `csv`, `tsv`, `msgpack` or `json` are available.
 

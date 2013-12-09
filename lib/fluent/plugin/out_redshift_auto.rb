@@ -36,6 +36,7 @@ class RedshiftOutput < BufferedOutput
   config_param :redshift_tablename, :string
   config_param :redshift_schemaname, :string, :default => "public"
   config_param :make_auto_table, :integer, :default => 1 #1 => make_auto 0=> no
+  config_param :tag_table, :integer, :default = 1 #1 => tag_name = table_name, 0 => no
   # file format
   config_param :file_type, :string, :default => nil  # json, tsv, csv
   config_param :delimiter, :string, :default => nil
@@ -90,8 +91,12 @@ class RedshiftOutput < BufferedOutput
 
   def write(chunk)
     $log.debug format_log("start creating gz.")
-    file_name = File::basename(chunk.path)
-    table_name = file_name.sub(/\..*/, "")
+    if @tag_table == 1 then
+      file_name = File::basename(chunk.path)
+      table_name = file_name.sub(/\..*/, "")
+    else 
+      table_name = @redshift_tablename
+    end
 
     # create a gz file
     tmp = Tempfile.new("s3-")
@@ -113,7 +118,6 @@ class RedshiftOutput < BufferedOutput
     # copy gz on s3 to redshift
     s3_uri = "s3://#{@s3_bucket}/#{s3path}"
     sql = @copy_sql_template % [table_name, s3_uri, @aws_sec_key]
-    $log.error format_log(sql)
     $log.debug  format_log("start copying. s3_uri=#{s3_uri}")
     conn = nil
     begin
